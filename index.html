@@ -9,9 +9,10 @@
   table { border-collapse: collapse; width: 100%; background: white; }
   th, td { border: 1px solid #ccc; padding: 8px; text-align: left; min-width: 120px; }
   th { background: #eef3ff; }
-  td[contenteditable="true"] { background: #fffdf5; }
+  td[contenteditable="true"], th[contenteditable="true"] { background: #fffdf5; }
   button { margin: 5px; padding: 6px 10px; }
   .toolbar { margin-bottom: 15px; }
+  input[type=file] { display: none; }
 </style>
 </head>
 <body>
@@ -22,7 +23,10 @@
   <button onclick="ajouterColonne()">+ Ajouter une colonne</button>
   <button onclick="supprimerLigne()">– Supprimer une ligne</button>
   <button onclick="supprimerColonne()">– Supprimer une colonne</button>
-  <button onclick="resetTable()">Réinitialiser</button>
+  <button onclick="exporterCSV()">💾 Exporter CSV</button>
+  <label for="importer" style="cursor:pointer; background:#ddd; padding:6px 10px; border-radius:4px;">📥 Importer CSV</label>
+  <input type="file" id="importer" accept=".csv" onchange="importerCSV(event)">
+  <button onclick="resetTable()">🧹 Réinitialiser</button>
 </div>
 
 <table id="tableau">
@@ -50,29 +54,29 @@
 </table>
 
 <script>
-const STORAGE_KEY = "benchmarkPyramides_v3";
+const STORAGE_KEY = "benchmarkPyramides_v4";
 const table = document.getElementById("tableau");
 
-// Sauvegarde
+// Sauvegarder dans le navigateur
 function saveTable() {
   localStorage.setItem(STORAGE_KEY, table.innerHTML);
 }
 
-// Chargement
+// Charger depuis le navigateur
 function loadTable() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) table.innerHTML = saved;
   attachListeners();
 }
 
-// Réattacher les écouteurs après restauration du HTML
+// Attacher les écouteurs de sauvegarde
 function attachListeners() {
   table.querySelectorAll("[contenteditable]").forEach(cell => {
     cell.addEventListener("input", saveTable);
   });
 }
 
-// Ajouter une ligne
+// Ajouter une ligne à l’endroit choisi
 function ajouterLigne() {
   const rowIndex = prompt("Insérer la ligne avant quel numéro ? (1 = première, vide = fin)");
   const tbody = table.querySelector("tbody");
@@ -104,11 +108,8 @@ function ajouterColonne() {
   for (let r = 0; r < table.rows.length; r++) {
     const row = table.rows[r];
     const cell = row.insertCell(index);
-    if (r === 0) {
-      cell.outerHTML = "<th contenteditable='true'>Nouvelle colonne</th>";
-    } else {
-      cell.setAttribute("contenteditable", "true");
-    }
+    if (r === 0) cell.outerHTML = "<th contenteditable='true'>Nouvelle colonne</th>";
+    else cell.setAttribute("contenteditable", "true");
   }
   attachListeners();
   saveTable();
@@ -125,7 +126,50 @@ function supprimerColonne() {
   saveTable();
 }
 
-// Réinitialiser le tableau
+// Exporter le tableau en CSV
+function exporterCSV() {
+  let csv = [];
+  for (let row of table.rows) {
+    let rowData = [];
+    for (let cell of row.cells) {
+      let text = cell.innerText.replace(/"/g, '""');
+      rowData.push('"' + text + '"');
+    }
+    csv.push(rowData.join(","));
+  }
+  const blob = new Blob([csv.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "benchmark_pyramides.csv";
+  a.click();
+}
+
+// Importer un fichier CSV
+function importerCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split(/\r?\n/).filter(l => l.trim());
+    table.innerHTML = "";
+    lines.forEach((line, i) => {
+      const row = table.insertRow(-1);
+      const cells = line.match(/("([^"]|"")*"|[^,]+)/g) || [];
+      cells.forEach((text, j) => {
+        const clean = text.replace(/^"|"$/g, "").replace(/""/g, '"');
+        const cell = row.insertCell(-1);
+        cell.textContent = clean;
+        if (i === 0) cell.outerHTML = `<th contenteditable="true">${clean}</th>`;
+        else cell.setAttribute("contenteditable", "true");
+      });
+    });
+    saveTable();
+    attachListeners();
+  };
+  reader.readAsText(file);
+}
+
+// Réinitialiser la table
 function resetTable() {
   if (confirm("Supprimer toutes les données et restaurer la table d'origine ?")) {
     localStorage.removeItem(STORAGE_KEY);
