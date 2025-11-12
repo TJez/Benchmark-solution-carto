@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Benchmark des pyramides cartographique</title>
+<style>
+  :root{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;}
+  body{max-width:1100px;margin:24px auto;padding:16px;line-height:1.4;color:#111;}
+  h1{font-size:1.6rem;margin:0 0 12px;}
+  p.note{margin:6px 0 18px;color:#444;font-size:0.95rem;}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+  button, input[type="file"]{padding:8px 10px;border-radius:6px;border:1px solid #bbb;background:#fafafa;cursor:pointer;}
+  button.primary{background:#0b74de;color:#fff;border-color:#0a66c2;}
+  table{width:100%;border-collapse:collapse;background:#fff;}
+  th, td{border:1px solid #d0d7de;padding:8px;vertical-align:top;}
+  th{background:#f3f6fb;font-weight:600;text-align:left;}
+  td[contenteditable="true"]{min-width:90px;}
+  .row-header{background:#eef4ff;font-weight:700;width:200px;}
+  .small{font-size:0.9rem;padding:6px 8px;}
+  .actions{display:flex;gap:6px;align-items:center;}
+  .right{margin-left:auto;display:flex;gap:8px;}
+  .footer{margin-top:12px;font-size:0.9rem;color:#555;}
+  .danger{background:#ffefef;border-color:#ffb4b4;}
+  .muted{color:#666;font-size:0.9rem}
+  input[type="text"]{padding:8px;border-radius:6px;border:1px solid #ccc;}
+</style>
+</head>
+<body>
+  <h1>Benchmark des pyramides cartographique</h1>
+  <p class="note">Tableau éditable — clique dans une cellule pour écrire. Les modifications sont sauvegardées automatiquement localement dans ton navigateur. Tu peux ajouter/supprimer lignes et colonnes, exporter/importer en CSV ou réinitialiser.</p>
+
+  <div class="controls">
+    <div class="actions">
+      <button id="addRow" class="small">➕ Ajouter une ligne</button>
+      <button id="addCol" class="small">➕ Ajouter une colonne</button>
+      <button id="delRow" class="small">➖ Supprimer dernière ligne</button>
+      <button id="delCol" class="small">➖ Supprimer dernière colonne</button>
+    </div>
+
+    <div class="right">
+      <button id="exportCSV" class="small">⬇️ Exporter CSV</button>
+      <label for="importFile" style="display:inline-block">
+        <input id="importFile" type="file" accept=".csv" style="display:none"/>
+        <button class="small">⬆️ Importer CSV</button>
+      </label>
+      <button id="reset" class="small danger">⚠️ Réinitialiser</button>
+    </div>
+  </div>
+
+  <div style="overflow:auto">
+    <table id="benchmarkTable" aria-label="Benchmark des pyramides cartographique">
+      <thead>
+        <tr id="headerRow">
+          <th class="row-header">Fournisseur</th>
+          <!-- colonnes ajoutées par JS -->
+        </tr>
+      </thead>
+      <tbody id="tableBody">
+        <!-- lignes ajoutées par JS -->
+      </tbody>
+    </table>
+  </div>
+
+  <div class="footer">
+    <span class="muted">Conseils :</span>
+    <span style="margin-left:8px">Double-clique ou touche une cellule puis tape. Les titres de colonnes peuvent être modifiés (double-clic). Pour ajouter un titre personnalisé de colonne, clique sur "Ajouter une colonne" et entre le nom demandé.</span>
+  </div>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'benchmarkPyramides_v1';
+
+  // initialisation demandée par l'utilisateur
+  const initialProviders = [
+    "OSM",
+    "ESRI France",
+    "Maptiler",
+    "Nexis",
+    "Via Michelin",
+    "TOMTOM",
+    "Dutch kadaster",
+    "Google Maps"
+  ];
+
+  const initialCols = [
+    "Type de pyramide",
+    "Origine de la donnée",
+    "Choix des données",
+    "Généralisation",
+    "Niveaux",
+    "Remarque"
+  ];
+
+  const table = document.getElementById('benchmarkTable');
+  const headerRow = document.getElementById('headerRow');
+  const tbody = document.getElementById('tableBody');
+
+  // ------------------ rendering ------------------
+  function buildEmptyGrid(cols, providers, data) {
+    // header: first cell already "Fournisseur"
+    // ensure header cells
+    headerRow.innerHTML = '<th class="row-header">Fournisseur</th>';
+    cols.forEach((c, i) => {
+      const th = document.createElement('th');
+      th.contentEditable = true;
+      th.className = 'col-header';
+      th.dataset.colIndex = i;
+      th.textContent = c || `Col ${i+1}`;
+      headerRow.appendChild(th);
+    });
+
+    // body
+    tbody.innerHTML = '';
+    providers.forEach((prov, rIdx) => {
+      const tr = document.createElement('tr');
+      const thRow = document.createElement('th');
+      thRow.className = 'row-header';
+      thRow.textContent = prov || `Ligne ${rIdx+1}`;
+      tr.appendChild(thRow);
+
+      cols.forEach((_, cIdx) => {
+        const td = document.createElement('td');
+        td.contentEditable = true;
+        td.dataset.row = rIdx;
+        td.dataset.col = cIdx;
+        // fill from saved data if present
+        if (data && data.cells && data.cells[rIdx] && typeof data.cells[rIdx][cIdx] !== 'undefined') {
+          td.textContent = data.cells[rIdx][cIdx];
+        } else {
+          td.textContent = '';
+        }
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ------------------ persistence ------------------
+  function save() {
+    const cols = Array.from(headerRow.querySelectorAll('th.col-header')).map(th => th.textContent);
+    const providers = Array.from(tbody.querySelectorAll('th.row-header')).map(th => th.textContent);
+    const rows = Array.from(tbody.querySelectorAll('tr')).map(tr => {
+      return Array.from(tr.querySelectorAll('td')).map(td => td.textContent);
+    });
+    const payload = { cols, providers, cells: rows, savedAt: new Date().toISOString() };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    // small visual feedback in console (no UI spam)
+    console.debug('Saved benchmark (localStorage)', payload);
+  }
+
+  function load() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      buildEmptyGrid(initialCols.slice(), initialProviders.slice(), null);
+      return;
+    }
+    try {
+      const data = JSON.parse(raw);
+      const cols = data.cols && data.cols.length ? data.cols : initialCols.slice();
+      const providers = data.providers && data.providers.length ? data.providers : initialProviders.slice();
+      buildEmptyGrid(cols, providers, data);
+    } catch (e) {
+      console.warn('Impossible de lire la sauvegarde — réinitialisation');
+      buildEmptyGrid(initialCols.slice(), initialProviders.slice(), null);
+    }
+  }
+
+  // ------------------ helpers for add/delete ------------------
+  function addRow(providerName = 'Nouvelle ligne') {
+    // add provider name
+    const providers = Array.from(tbody.querySelectorAll('th.row-header')).map(th => th.textContent);
+    providers.push(providerName);
+    // build table again but keep data
+    const data = readGrid();
+    data.providers.push(providerName);
+    buildEmptyGrid(data.cols, data.providers, data);
+    hookEditable();
+    save();
+  }
+
+  function addCol(colTitle = 'Nouvelle colonne') {
+    const data = readGrid();
+    data.cols.push(colTitle);
+    // append empty cell to each existing row in data.cells
+    data.cells.forEach(row => row.push(''));
+    buildEmptyGrid(data.cols, data.providers, data);
+    hookEditable();
+    save();
+  }
+
+  function delRow() {
+    const data = readGrid();
+    if (data.providers.length === 0) return;
+    data.providers.pop();
+    data.cells.pop();
+    buildEmptyGrid(data.cols, data.providers, data);
+    hookEditable();
+    save();
+  }
+
+  function delCol() {
+    const data = readGrid();
+    if (data.cols.length === 0) return;
+    data.cols.pop();
+    data.cells.forEach(row => row.pop());
+    buildEmptyGrid(data.cols, data.providers, data);
+    hookEditable();
+    save();
+  }
+
+  // ------------------ read grid to object ------------------
+  function readGrid() {
+    const cols = Array.from(headerRow.querySelectorAll('th.col-header')).map(th => th.textContent);
+    const providers = Array.from(tbody.querySelectorAll('th.row-header')).map(th => th.textContent);
+    const cells = Array.from(tbody.querySelectorAll('tr')).map(tr => Array.from(tr.querySelectorAll('td')).map(td => td.textContent));
+    return { cols, providers, cells };
+  }
+
+  // ------------------ CSV export/import ------------------
+  function exportCSV() {
+    const data = readGrid();
+    // CSV with first column "Fournisseur"
+    const rows = [];
+    const header = ['Fournisseur', ...data.cols];
+    rows.push(header);
+    data.providers.forEach((prov, rIdx) => {
+      const row = [escapeCsv(prov), ...data.cells[rIdx].map(escapeCsv)];
+      rows.push(row);
+    });
+    const csv = rows.map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'benchmark_pyramides.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function escapeCsv(str) {
+    if (typeof str !== 'string') str = String(str || '');
+    if (str.includes('"') || str.includes(',') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  function importCSVFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      const text = e.target.result;
+      try {
+        importFromCSV(text);
+        save();
+      } catch (err) {
+        alert('Import CSV échoué: ' + err.message);
+      }
+    };
+    reader.readAsText(file, 'utf-8');
+  }
+
+  function importFromCSV(text) {
+    // simple CSV parser that supports quoted fields
+    const rows = [];
+    const re = /(?:\r\n|\n|\r)/;
+    const lines = text.split(re).filter(l => l.trim().length > 0);
+    for (const line of lines) {
+      const cols = [];
+      let cur = '', inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQuote) {
+          if (ch === '"') {
+            if (line[i+1] === '"') { cur += '"'; i++; }
+            else inQuote = false;
+          } else cur += ch;
+        } else {
+          if (ch === '"') { inQuote = true; }
+          else if (ch === ',') { cols.push(cur); cur = ''; }
+          else cur += ch;
+        }
+      }
+      cols.push(cur);
+      rows.push(cols);
+    }
+    if (rows.length === 0) throw new Error('CSV vide');
+    // first row header: first column should be "Fournisseur" (mais on accepte si non)
+    const header = rows[0];
+    const cols = header.slice(1); // skip first = fournisseurs
+    const providers = [];
+    const cells = [];
+    for (let r = 1; r < rows.length; r++) {
+      providers.push(rows[r][0] || `Ligne ${r}`);
+      const rowCells = [];
+      for (let c = 1; c < header.length; c++) {
+        rowCells.push(rows[r][c] || '');
+      }
+      // if row has fewer cols, pad
+      while (rowCells.length < cols.length) rowCells.push('');
+      cells.push(rowCells);
+    }
+    // if no providers found, fallback to initial
+    const payload = {
+      cols: cols.length ? cols : initialCols.slice(),
+      providers: providers.length ? providers : initialProviders.slice(),
+      cells: cells.length ? cells : initialProviders.map(() => Array(cols.length || initialCols.length).fill(''))
+    };
+    buildEmptyGrid(payload.cols, payload.providers, payload);
+    hookEditable();
+  }
+
+  // ------------------ event wiring ------------------
+  function hookEditable() {
+    // remove previous listeners by cloning?
+    // We'll add eventlistener on tbody for input events (delegation)
+    // Remove existing to avoid duplicates
+    tbody.replaceWith(tbody.cloneNode(true));
+    const newTbody = document.getElementById('tableBody') || table.querySelector('tbody');
+    // but since we replaced, reassign
+    const newtbody = table.querySelector('tbody');
+    // attach handler
+    newtbody.addEventListener('input', (e) => {
+      // any edit -> save
+      save();
+    });
+    // header editing
+    headerRow.querySelectorAll('th.col-header').forEach(th => {
+      th.addEventListener('input', () => save());
+    });
+    // allow double-click to edit row headers? They are not contentEditable initially; make editable on dblclick
+    newtbody.querySelectorAll('th.row-header').forEach(th => {
+      th.addEventListener('dblclick', () => {
+        th.contentEditable = 'true';
+        th.focus();
+        const onBlur = () => { th.contentEditable = 'false'; save(); th.removeEventListener('blur', onBlur); };
+        th.addEventListener('blur', onBlur);
+      });
+    });
+  }
+
+  // ------------------ attach controls ------------------
+  document.getElementById('addRow').addEventListener('click', () => {
+    const name = prompt('Nom de la nouvelle ligne (fournisseur) :','Nouveau fournisseur');
+    addRow(name || 'Nouveau fournisseur');
+  });
+  document.getElementById('addCol').addEventListener('click', () => {
+    const name = prompt('Titre de la nouvelle colonne :','Nouvelle colonne');
+    addCol(name || 'Nouvelle colonne');
+  });
+  document.getElementById('delRow').addEventListener('click', () => {
+    if (!confirm('Supprimer la dernière ligne ?')) return;
+    delRow();
+  });
+  document.getElementById('delCol').addEventListener('click', () => {
+    if (!confirm('Supprimer la dernière colonne ?')) return;
+    delCol();
+  });
+
+  document.getElementById('exportCSV').addEventListener('click', () => exportCSV());
+  document.getElementById('importFile').addEventListener('change', (ev) => {
+    const f = ev.target.files[0];
+    if (!f) return;
+    if (!confirm('Importer le CSV va remplacer la table actuelle. Continuer ?')) {
+      ev.target.value = '';
+      return;
+    }
+    importCSVFile(f);
+    ev.target.value = '';
+  });
+
+  document.getElementById('reset').addEventListener('click', () => {
+    if (!confirm('Réinitialiser la table et supprimer la sauvegarde locale ?')) return;
+    localStorage.removeItem(STORAGE_KEY);
+    load();
+    hookEditable();
+  });
+
+  // Save also on page hide/unload
+  window.addEventListener('beforeunload', save);
+
+  // keyboard shortcut Ctrl+S pour sauvegarder (évite sauve auto)
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault();
+      save();
+      alert('Sauvegardé localement.');
+    }
+  });
+
+  // ------------------ init ------------------
+  load();
+  hookEditable();
+
+  // Expose save/read for console debugging if besoin
+  window.__benchmark = { save, load, readGrid };
+})();
+</script>
+</body>
+</html>
